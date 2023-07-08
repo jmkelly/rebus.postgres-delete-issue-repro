@@ -3,9 +3,15 @@ using Elsa.Persistence.EntityFramework.Core.Extensions;
 using Elsa.Persistence.EntityFramework.PostgreSql;
 using Rebus.Config;
 using Rebus.PostgreSql;
+using Rebus.Backoff;
+
+const string connectionString =
+    "Host=localhost;Database=postgres;Username=postgres;Password=postgres;Persist Security Info=True;Include Error Detail=True";
 
 var builder = WebApplication.CreateBuilder(args);
 AddElsa(builder.Services);
+
+//AddRebus(builder.Services);
 
 var app = builder.Build();
 
@@ -28,21 +34,41 @@ static IServiceCollection AddElsa(IServiceCollection services)
         order by calls desc
         limit 10;
      */
-    const string connectionString = "Host=localhost;Database=postgres;Username=postgres;Password=postgres;Persist Security Info=True;Include Error Detail=True";
 
-    return services
-        .AddElsa(options =>
-        {
-            var provider = new PostgresConnectionHelper(connectionString);
+    return services.AddElsa(options =>
+    {
+        var provider = new PostgresConnectionHelper(connectionString);
 
-            options
-                .UseEntityFrameworkPersistence<ElsaContext>(ef => ef.UsePostgreSql(connectionString), true)
-                .UseServiceBus(sb => sb.Configurer
-                    .Transport(t =>
-                        t.UsePostgreSql(provider, "sb", sb.QueueName,
-                            schemaName: "wf"))
-                    .Subscriptions(s =>
-                        s.StoreInPostgres(provider, "sub", true,
-                            schemaName: "wf")));
-        });
+        options
+            .UseEntityFrameworkPersistence<ElsaContext>(
+                ef => ef.UsePostgreSql(connectionString),
+                true
+            )
+            .UseServiceBus(
+                sb =>
+                    sb.Configurer
+                        .Transport(
+                            t =>
+                                t.UsePostgreSql(
+                                    provider,
+                                    "sb",
+                                    sb.QueueName,
+                                    schemaName: "wf"
+                                )
+                        )
+                        .Options(o =>
+                        {
+                            o.SetNumberOfWorkers(1);
+                            o.SetMaxParallelism(1);
+                            o.SetBackoffTimes(
+                                TimeSpan.FromMilliseconds(100),
+                                TimeSpan.FromMilliseconds(200),
+                                TimeSpan.FromSeconds(1)
+                            );
+                        })
+                        .Subscriptions(
+                            s => s.StoreInPostgres(provider, "sub", true, schemaName: "wf")
+                        )
+            );
+    });
 }
